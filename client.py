@@ -6,7 +6,7 @@ import time
 TYPE_DATA = 0 #Igual no server.py
 TYPE_ACK = 1  #Igual no server.py
 
-HEADER_FMT = "!BIIH"
+HEADER_FMT = "!BIIHH"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
 
 PAYLOAD_SIZE = 1000 
@@ -15,19 +15,21 @@ TIMEOUT = 0.2
 
 # Monta bytes do pacote (Header + Payload)
 def make_data(seq: int, payload: bytes) -> bytes:
-    return struct.pack(HEADER_FMT, TYPE_DATA, seq, 0, len(payload)) + payload
+    return struct.pack(HEADER_FMT, TYPE_DATA, seq, 0, 0, len(payload)) + payload
 
 def parse_packet(data: bytes):
     if len(data) < HEADER_SIZE:
         return None
-    ptype, seq, ack, length = struct.unpack(HEADER_FMT, data[:HEADER_SIZE])
+    ptype, seq, ack, rwnd, length = struct.unpack(HEADER_FMT, data[:HEADER_SIZE])
     payload = data[HEADER_SIZE:HEADER_SIZE + length]
-    return ptype, seq, ack, payload
+    return ptype, seq, ack, rwnd, payload
 
 def run_client(server_host="127.0.0.1", server_port=9000, total_packets=10000):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     sock.settimeout(0.05)  #Cliente não fica travado esperando um ACK. Se nada chegar em 0.05, ele continua executando a lógica de retransmissão e controle
+
+    peer_rwnd = WINDOW
 
     server = (server_host, server_port)
 
@@ -44,8 +46,11 @@ def run_client(server_host="127.0.0.1", server_port=9000, total_packets=10000):
         inflight[seq] = (pkt, time.time())
 
     while send_base < total_packets:
+
+        effective_window = min(WINDOW, peer_rwnd)
+
         # Envia enquanto houver espaço na janela
-        while next_seq < total_packets and (next_seq - send_base) < WINDOW:
+        while next_seq < total_packets and (next_seq - send_base) < effective_window:
             send_packet(next_seq)
             next_seq += 1
 
@@ -54,8 +59,19 @@ def run_client(server_host="127.0.0.1", server_port=9000, total_packets=10000):
             data, _ = sock.recvfrom(65535)
             parsed = parse_packet(data)
             if parsed:
-                ptype, seq, ack, payload = parsed
+                ptype, seq, ack, rwnd, payload = parsed
                 if ptype == TYPE_ACK:
+                    
+                    old = peer_rwnd
+                    peer_rwnd = rwnd
+
+                    if peer_rwnd != old:
+                        print(
+                            f"[client] rwnd change at ack={ack} | "
+                            f"{old} -> {peer_rwnd} "
+                            f"(effective={min(WINDOW, peer_rwnd)})"
+                        )
+
                     # ACK cumulativo: confirma tudo com seq < ack
                     if ack > send_base:
                         for s in list(inflight.keys()):
