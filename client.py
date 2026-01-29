@@ -98,9 +98,18 @@ def run_client(server_host="127.0.0.1", server_port=9000, total_packets=10000):
 
     cc = CongestionController()  # Controlador de congestionamento dinâmico
 
+    # Estatísticas
+    total_packets_sent = 0  # Total de pacotes enviados (incluindo retransmissões)
+    total_retransmissions = 0  # Número de retransmissões
+    duplicate_acks_count = 0  # Número de ACKs duplicados
+    max_cwnd = 0.0  # Maior cwnd alcançado
+    cwnd_history = []  # Histórico de cwnd para análise
+
     start = time.time()
 
     def send_packet(seq: int):
+        nonlocal total_packets_sent
+
         payload = (
             bytes([seq % 256]) * PAYLOAD_SIZE
         )  # Byte com valor entre 0 a 255 repetido 1000 vezes. Payload com 1000 bytes repetidos. (Só para teste)
@@ -120,6 +129,7 @@ def run_client(server_host="127.0.0.1", server_port=9000, total_packets=10000):
         pkt = make_data(seq, encrypted_payload)
         sock.sendto(pkt, server)
         inflight[seq] = (pkt, time.time())
+        total_packets_sent += 1
 
     while send_base < total_packets:
         # Envia enquanto houver espaço na janela (usa cwnd dinâmico)
@@ -143,6 +153,15 @@ def run_client(server_host="127.0.0.1", server_port=9000, total_packets=10000):
                         cc.ack_received(
                             ack
                         )  # Notifica o controlador sobre ACK recebido
+
+                        # Atualiza cwnd máximo
+                        if cc.cwnd > max_cwnd:
+                            max_cwnd = cc.cwnd
+                        cwnd_history.append(cc.cwnd)
+                    elif ack == send_base:
+                        # ACK duplicado
+                        duplicate_acks_count += 1
+                        cc.ack_received(ack)
         # Se não chegar ack, continua o processo
         except socket.timeout:
             pass
@@ -154,27 +173,75 @@ def run_client(server_host="127.0.0.1", server_port=9000, total_packets=10000):
                 sock.sendto(pkt, server)
                 inflight[send_base] = (pkt, time.time())
                 cc.timeout_occurred()  # Notifica o controlador sobre timeout
+                total_retransmissions += 1
+                total_packets_sent += 1
+                save_log(
+                    CLIENT_LOG_DIR,
+                    f"[client] RETRANSMISSION seq={send_base} (total={total_retransmissions})",
+                )
 
         # A cada 1000 pacotes confirmados, calcula throughput médio em Mbps
         if send_base % 1000 == 0 and send_base > 0:
             elapsed = time.time() - start
             mbps = (send_base * PAYLOAD_SIZE * 8) / (elapsed * 1e6)
+            retrans_rate = (
+                (total_retransmissions / total_packets_sent * 100)
+                if total_packets_sent > 0
+                else 0
+            )
             print(
-                f"[client] acked={send_base}/{total_packets} inflight={len(inflight)} cwnd={cc.cwnd:.2f} ~{mbps:.2f} Mbps"
+                f"[client] acked={send_base}/{total_packets} inflight={len(inflight)} cwnd={cc.cwnd:.2f} "
+                f"~{mbps:.2f} Mbps | sent={total_packets_sent} retrans={total_retransmissions} ({retrans_rate:.1f}%) "
+                f"dup_acks={duplicate_acks_count}"
             )
             save_log(
                 CLIENT_LOG_DIR,
-                f"acked={send_base}/{total_packets} inflight={len(inflight)} cwnd={cc.cwnd:.2f} ~{mbps:.2f} Mbps",
+                f"acked={send_base}/{total_packets} inflight={len(inflight)} cwnd={cc.cwnd:.2f} ~{mbps:.2f} Mbps | "
+                f"sent={total_packets_sent} retrans={total_retransmissions} ({retrans_rate:.1f}%) dup_acks={duplicate_acks_count}",
             )
 
     # tempo e throuhput total
     elapsed = time.time() - start
     mbps = (total_packets * PAYLOAD_SIZE * 8) / (elapsed * 1e6)
-    print(f"[client] done! time={elapsed:.2f}s avg_throughput={mbps:.2f} Mbps")
+    retrans_rate = (
+        (total_retransmissions / total_packets_sent * 100)
+        if total_packets_sent > 0
+        else 0
+    )
+    avg_cwnd = sum(cwnd_history) / len(cwnd_history) if cwnd_history else 0
+
+    print("\n" + "=" * 80)
+    print("[CLIENT] RELATÓRIO FINAL")
+    print("=" * 80)
+    print(f"Tempo total: {elapsed:.2f}s")
+    print(f"Throughput médio: {mbps:.2f} Mbps")
+    print(f"Pacotes úteis enviados: {total_packets}")
+    print(f"Total de transmissões (incluindo retrans.): {total_packets_sent}")
+    print(f"Retransmissões: {total_retransmissions} ({retrans_rate:.2f}%)")
+    print(f"ACKs duplicados: {duplicate_acks_count}")
+    print(f"Cwnd máximo: {max_cwnd:.2f}")
+    print(f"Cwnd médio: {avg_cwnd:.2f}")
+    print(f"Estado final: {cc.state}")
+    print("=" * 80 + "\n")
+
+    save_log(CLIENT_LOG_DIR, "\n" + "=" * 80)
+    save_log(CLIENT_LOG_DIR, "[CLIENT] RELATÓRIO FINAL")
+    save_log(CLIENT_LOG_DIR, "=" * 80)
+    save_log(CLIENT_LOG_DIR, f"Tempo total: {elapsed:.2f}s")
+    save_log(CLIENT_LOG_DIR, f"Throughput médio: {mbps:.2f} Mbps")
+    save_log(CLIENT_LOG_DIR, f"Pacotes úteis enviados: {total_packets}")
     save_log(
         CLIENT_LOG_DIR,
-        f"[client] done! time={elapsed:.2f}s avg_throughput={mbps:.2f} Mbps",
+        f"Total de transmissões (incluindo retrans.): {total_packets_sent}",
     )
+    save_log(
+        CLIENT_LOG_DIR, f"Retransmissões: {total_retransmissions} ({retrans_rate:.2f}%)"
+    )
+    save_log(CLIENT_LOG_DIR, f"ACKs duplicados: {duplicate_acks_count}")
+    save_log(CLIENT_LOG_DIR, f"Cwnd máximo: {max_cwnd:.2f}")
+    save_log(CLIENT_LOG_DIR, f"Cwnd médio: {avg_cwnd:.2f}")
+    save_log(CLIENT_LOG_DIR, f"Estado final: {cc.state}")
+    save_log(CLIENT_LOG_DIR, "=" * 80)
 
 
 if __name__ == "__main__":

@@ -31,13 +31,22 @@ def parse_packet(data: bytes):
     return ptype, seq, ack, payload
 
 
-def run_server(host="0.0.0.0", port=9000):
+def run_server(host="0.0.0.0", port=9000, packet_loss_rate=0.0):
+    """
+    Servidor UDP com suporte a perda simulada de pacotes.
 
+    Args:
+        host: Endereço de IP para bind
+        port: Porta para escutar
+        packet_loss_rate: Taxa de perda de pacotes (0.0 a 1.0). Ex: 0.1 = 10% de perda
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # IPv4, UDP
     sock.bind((host, port))
 
     print(f"[server] listening on {host}:{port}")
+    print(f"[server] packet loss rate: {packet_loss_rate * 100:.1f}%")
     save_log(SERVER_LOG_DIR, f"Server started on {host}:{port}")
+    save_log(SERVER_LOG_DIR, f"Packet loss rate: {packet_loss_rate * 100:.1f}%")
 
     expected_seq = 0
 
@@ -48,6 +57,10 @@ def run_server(host="0.0.0.0", port=9000):
     client_addr = None
     delivered = 0
     crypto = SimpleCrypto()  # Instância de criptografia
+
+    # Estatísticas
+    total_received = 0
+    total_dropped = 0
 
     while True:
         data, addr = sock.recvfrom(
@@ -88,6 +101,16 @@ def run_server(host="0.0.0.0", port=9000):
         if ptype != TYPE_DATA:
             continue
 
+        # Simulação de perda de pacotes (apenas para pacotes de dados)
+        total_received += 1
+        if random.random() < packet_loss_rate:
+            total_dropped += 1
+            save_log(
+                SERVER_LOG_DIR,
+                f"[server] DROPPED packet seq={seq} (total_dropped={total_dropped})",
+            )
+            continue  # Descarta o pacote
+
         # Decifra o payload se a criptografia estiver estabelecida
         if crypto.is_established():
             decrypted_payload = crypto.decrypt(payload, seq)
@@ -127,12 +150,17 @@ def run_server(host="0.0.0.0", port=9000):
         sock.sendto(ack_pkt, client_addr)
 
         if delivered % 1000 == 0 and delivered > 0:
+            loss_rate = (
+                (total_dropped / total_received * 100) if total_received > 0 else 0
+            )
             print(
-                f"[server] delivered={delivered} expected_seq={expected_seq} buffered={len(buffer)}"
+                f"[server] delivered={delivered} expected_seq={expected_seq} buffered={len(buffer)} "
+                f"received={total_received} dropped={total_dropped} ({loss_rate:.1f}%)"
             )
             save_log(
                 SERVER_LOG_DIR,
-                f"delivered={delivered} expected_seq={expected_seq} buffered={len(buffer)}",
+                f"delivered={delivered} expected_seq={expected_seq} buffered={len(buffer)} "
+                f"received={total_received} dropped={total_dropped} ({loss_rate:.1f}%)",
             )
 
 
