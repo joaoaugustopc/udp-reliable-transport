@@ -13,7 +13,6 @@ TYPE_NONCE_RESP = 3  # Servidor responde com seu nonce
 
 HEADER_FMT = "!BIIHH"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
-
 PAYLOAD_SIZE = 1000
 TIMEOUT = 0.2
 
@@ -42,7 +41,7 @@ def crypto_handshake(sock, server, crypto: SimpleCrypto) -> bool:
 
     # Envia pedido de handshake com o nonce
     nonce_req = (
-        struct.pack(HEADER_FMT, TYPE_NONCE_REQ, 0, 0, len(client_nonce)) + client_nonce
+        struct.pack(HEADER_FMT, TYPE_NONCE_REQ, 0, 0, 0, len(client_nonce)) + client_nonce
     )
     sock.sendto(nonce_req, server)
 
@@ -52,7 +51,7 @@ def crypto_handshake(sock, server, crypto: SimpleCrypto) -> bool:
         data, _ = sock.recvfrom(65535)
         parsed = parse_packet(data)
         if parsed:
-            ptype, seq, ack, payload = parsed
+            ptype, seq, ack, rwnd, payload = parsed
             if ptype == TYPE_NONCE_RESP and len(payload) >= 16:
                 server_nonce = payload[:16]
                 # Deriva a chave de sessão
@@ -76,7 +75,7 @@ def run_client(server_host="127.0.0.1", server_port=9000, total_packets=10000):
 
     sock.settimeout(0.05)  #Cliente não fica travado esperando um ACK. Se nada chegar em 0.05, ele continua executando a lógica de retransmissão e controle
 
-    peer_rwnd = WINDOW
+    peer_rwnd = float("inf")
 
     server = (server_host, server_port)
 
@@ -126,9 +125,8 @@ def run_client(server_host="127.0.0.1", server_port=9000, total_packets=10000):
 
     while send_base < total_packets:
         # Envia enquanto houver espaço na janela (usa cwnd dinâmico)
-        while next_seq < total_packets and (next_seq - send_base) < int(cc.cwnd):
 
-        effective_window = min(WINDOW, peer_rwnd)
+        effective_window = min(int(cc.cwnd), peer_rwnd)
 
         # Envia enquanto houver espaço na janela
         while next_seq < total_packets and (next_seq - send_base) < effective_window:
@@ -142,16 +140,19 @@ def run_client(server_host="127.0.0.1", server_port=9000, total_packets=10000):
             if parsed:
                 ptype, seq, ack, rwnd, payload = parsed
                 if ptype == TYPE_ACK:
-                    
-                    old = peer_rwnd
-                    peer_rwnd = rwnd
 
-                    if peer_rwnd != old:
-                        print(
-                            f"[client] rwnd change at ack={ack} | "
-                            f"{old} -> {peer_rwnd} "
-                            f"(effective={min(WINDOW, peer_rwnd)})"
-                        )
+                    peer_rwnd = rwnd
+                    
+                    ## Apenas para teste
+                    # old = peer_rwnd
+                    # peer_rwnd = rwnd
+
+                    # if peer_rwnd != old:
+                    #     print(
+                    #         f"[client] rwnd change at ack={ack} | "
+                    #         f"{old} -> {peer_rwnd} "
+                    #         f"(effective={min(WINDOW, peer_rwnd)})"
+                    #     )
 
                     # ACK cumulativo: confirma tudo com seq < ack
                     if ack > send_base:

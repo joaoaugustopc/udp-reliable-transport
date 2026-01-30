@@ -10,14 +10,13 @@ TYPE_ACK = 1
 TYPE_NONCE_REQ = 2  # Cliente solicita início do handshake
 TYPE_NONCE_RESP = 3  # Servidor responde com seu nonce
 
-HEADER_FMT = "!BIIH"
-HEADER_SIZE = struct.calcsize(HEADER_FMT)
-
 #Define o formato do header
 HEADER_FMT = "!BIIHH"  # type(1), seq(4), ack(4), rwnd(2) lenght(2)
 HEADER_SIZE = struct.calcsize(HEADER_FMT) # Calcula quantos bytes o header tem no total
 
 RECV_BUFFER_PKTS = 5
+
+SERVER_LOG_DIR = "server_logs"
 
 
 #Empacota os valores e transforma em uma sequência de bytes
@@ -82,30 +81,7 @@ def run_server(host="0.0.0.0", port=9000):
 
                 # Envia o nonce do servidor de volta
                 nonce_resp = (
-                    struct.pack(HEADER_FMT, TYPE_NONCE_RESP, 0, 0, len(server_nonce))
-                    + server_nonce
-                )
-                sock.sendto(nonce_resp, addr)
-                print(f"[server] crypto handshake completed with {addr}")
-                print(f"[server] client_nonce: {client_nonce.hex()[:16]}...")
-                print(f"[server] server_nonce: {server_nonce.hex()[:16]}...")
-                print(f"[server] session_key:  {crypto.session_key.hex()[:16]}...")
-                save_log(SERVER_LOG_DIR, f"Crypto handshake completed with {addr}")
-            continue
-
-        # Handshake de criptografia
-        if ptype == TYPE_NONCE_REQ:
-            # Cliente envia seu nonce, servidor responde com o seu
-            if len(payload) >= 16:
-                client_nonce = payload[:16]
-                server_nonce = crypto.generate_nonce()
-
-                # Deriva a chave de sessão - MESMA ORDEM que o cliente
-                crypto.derive_session_key(client_nonce, server_nonce)
-
-                # Envia o nonce do servidor de volta
-                nonce_resp = (
-                    struct.pack(HEADER_FMT, TYPE_NONCE_RESP, 0, 0, len(server_nonce))
+                    struct.pack(HEADER_FMT, TYPE_NONCE_RESP, 0, 0,0, len(server_nonce))
                     + server_nonce
                 )
                 sock.sendto(nonce_resp, addr)
